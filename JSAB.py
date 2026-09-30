@@ -1,13 +1,13 @@
 """
-Just Shapes and Beats
+Just Shapes without Beats
 Made by BR_Creator
-Panel de Admin expandido — nuevas pestañas: SPAWN, MAPA, LOG
 """
 
 import tkinter as tk
 import random
 import math
 import time
+
 
 WIDTH, HEIGHT = 800, 600
 FPS           = 60
@@ -18,11 +18,13 @@ MAX_LIVES     = 4
 
 DASH_SPEED    = 22
 DASH_DURATION = 10
-DASH_COOLDOWN = 45
+DASH_COOLDOWN = 35
 
 TRAIL_MAX_AGE    = 18
 AVALANCHE_EVERY  = 30
 AVALANCHE_WARN   = 5
+
+PASS = 13579
 
 BG_COLOR       = "#0a0012"
 PLAYER_COLOR   = "#ff2d78"
@@ -47,9 +49,6 @@ SPIRAL_WARN  = "#00ffaa"
 SHOCK_WARN   = "#ff00ff"
 CROSS_WARN   = "#ffff00"
 
-# ─────────────────────────────────────────────
-# OBSTACULOS BASE
-# ─────────────────────────────────────────────
 class Obstacle:
     def __init__(self, canvas, otype, **kwargs):
         self.canvas     = canvas
@@ -288,9 +287,6 @@ class BallBurst(Obstacle):
         return any(math.hypot(px-b["x"],py-b["y"])<r+PLAYER_SIZE//2 for b in self.balls)
 
 
-# ─────────────────────────────────────────────
-# OBSTACULOS EXCLUSIVOS DE BOSS
-# ─────────────────────────────────────────────
 class RotatingLaser(Obstacle):
     def _init(self, **kwargs):
         self.cx        = kwargs.get("cx", WIDTH//2)
@@ -537,9 +533,6 @@ class BossCross(Obstacle):
         return False
 
 
-# ─────────────────────────────────────────────
-# UTILIDADES
-# ─────────────────────────────────────────────
 def lerp_col(c1, c2, t):
     t=max(0.,min(1.,t))
     r1,g1,b1=int(c1[1:3],16),int(c1[3:5],16),int(c1[5:7],16)
@@ -548,9 +541,6 @@ def lerp_col(c1, c2, t):
         int(r1+(r2-r1)*t),int(g1+(g2-g1)*t),int(b1+(b2-b1)*t))
 
 
-# ─────────────────────────────────────────────
-# CLASE JUEGO BASE
-# ─────────────────────────────────────────────
 class GameBase:
     def __init__(self, root, canvas, mode):
         self.root   = root
@@ -594,7 +584,9 @@ class GameBase:
         self.keys.discard(e.keysym)
 
     def _try_dash(self):
-        if self.state != "playing": return
+        # FIX 3: Permitir dash también en los estados de la secuencia final
+        allowed = ("playing", "split_laser_warn", "split_laser", "final_countdown")
+        if self.state not in allowed: return
         if self.dashing or self.dash_cooldown > 0: return
         dx = dy = 0.0
         if "Left"  in self.keys or "a" in self.keys: dx -= 1.0
@@ -739,14 +731,11 @@ class GameBase:
             pulse=int(180+75*math.sin(time.time()*3))
             bc="#{:02x}{:02x}{:02x}".format(pulse,pulse,pulse)
             self.canvas.create_text(WIDTH//2,HEIGHT//2+148,
-                text="[ CLICK PARA INTENTARLO DE NUEVO ]",
+                text="[ CLICK PARA INTENTARLO DE NUEVO ]", # ERROR -> no funciona
                 font=("Courier",14,"bold"),fill=bc)
         self.root.after(1000//FPS, lambda: self._run_go_anim(extra_lines))
 
 
-# ─────────────────────────────────────────────
-# MODO NORMAL
-# ─────────────────────────────────────────────
 class NormalMode(GameBase):
     def __init__(self, root, canvas, back_cb):
         super().__init__(root, canvas, "normal")
@@ -895,9 +884,6 @@ class NormalMode(GameBase):
         ])
 
 
-# ─────────────────────────────────────────────
-# MODO BOSS FIGHT
-# ─────────────────────────────────────────────
 BOSS_MAX_HP   = 100
 BOSS_SIZE     = 45
 BOSS_X        = WIDTH  // 2
@@ -1031,9 +1017,6 @@ class Companion(SubEntity):
         return attacks
 
 
-# ─────────────────────────────────────────────
-# BOSS FIGHT
-# ─────────────────────────────────────────────
 class BossFightMode(GameBase):
     def __init__(self, root, canvas, back_cb):
         super().__init__(root, canvas, "boss")
@@ -1083,10 +1066,23 @@ class BossFightMode(GameBase):
         super()._hit()
 
     def _try_dash(self):
-        if self.state != "playing": return
+        # FIX 3: contar dashes también en secuencia final
+        allowed = ("playing", "split_laser_warn", "split_laser", "final_countdown")
+        if self.state not in allowed: return
         if self.dashing or self.dash_cooldown > 0: return
         self.dashes_used += 1
-        super()._try_dash()
+        # Llamar directamente a la lógica de dash (no a super que filtra por state)
+        dx = dy = 0.0
+        if "Left"  in self.keys or "a" in self.keys: dx -= 1.0
+        if "Right" in self.keys or "d" in self.keys: dx += 1.0
+        if "Up"    in self.keys or "w" in self.keys: dy -= 1.0
+        if "Down"  in self.keys or "s" in self.keys: dy += 1.0
+        if dx == 0.0 and dy == 0.0: dy = -1.0
+        mag = math.hypot(dx, dy)
+        self.dash_dx = dx / mag
+        self.dash_dy = dy / mag
+        self.dashing = True
+        self.dash_frames = DASH_DURATION
 
     def _on_click(self, _):
         if self.state in ("gameover","won"): self.back_cb()
@@ -1363,6 +1359,7 @@ class BossFightMode(GameBase):
         self.canvas.delete("all")
         self._draw_boss_bg()
 
+        # ── FASE 1: Boss explota ──────────────────────────────────────
         if self.state == "dying":
             shake = 0
             if f < 40:
@@ -1395,11 +1392,17 @@ class BossFightMode(GameBase):
                 self.root.after(1000//FPS, self._run_death_sequence)
                 return
 
+        # ── FASE 2: Aviso del rayo final (FIX 1: _handle_input activo) ──
         elif self.state == "split_laser_warn":
+            # FIX 1: el jugador puede moverse para esquivar
+            self._handle_input()
+            self.alarm_phase += 0.12
+
             sep = int(f * 1.5)
             self._draw_boss_half(BOSS_X - sep, BOSS_Y, "left")
             self._draw_boss_half(BOSS_X + sep, BOSS_Y, "right")
 
+            # El ángulo apunta hacia donde estaba el jugador al inicio, luego se congela
             self.death_angle = math.atan2(
                 self.py - BOSS_Y, self.px - BOSS_X)
             if (f // 6) % 2 == 0:
@@ -1415,42 +1418,58 @@ class BossFightMode(GameBase):
                 font=("Courier", 16, "bold"), fill="#ff4400")
 
             self._draw_player()
-            self._draw_hud()
+            self._draw_lives_and_dash()
 
             if f >= 48:
+                # Congelar ángulo justo antes de disparar
+                self._frozen_death_angle = self.death_angle
                 self.state = "split_laser"
                 self.death_frame = 0
                 self.root.after(1000//FPS, self._run_death_sequence)
                 return
 
+        # ── FASE 3: Rayo activo (FIX 1 + FIX 2) ─────────────────────
         elif self.state == "split_laser":
+            # FIX 1: el jugador puede moverse para esquivar
+            self._handle_input()
+            self.alarm_phase += 0.12
+
             sep = min(120, int(48 * 1.5))
             self._draw_boss_half(BOSS_X - sep, BOSS_Y, "left")
             self._draw_boss_half(BOSS_X + sep, BOSS_Y, "right")
 
-            ex = BOSS_X + math.cos(self.death_angle) * max(WIDTH,HEIGHT)
-            ey = BOSS_Y + math.sin(self.death_angle) * max(WIDTH,HEIGHT)
-            ex2= BOSS_X - math.cos(self.death_angle) * max(WIDTH,HEIGHT)
-            ey2= BOSS_Y - math.sin(self.death_angle) * max(WIDTH,HEIGHT)
+            # Usar ángulo congelado para que el jugador pueda esquivarlo moviéndose
+            angle = getattr(self, "_frozen_death_angle", self.death_angle)
+            ex = BOSS_X + math.cos(angle) * max(WIDTH,HEIGHT)
+            ey = BOSS_Y + math.sin(angle) * max(WIDTH,HEIGHT)
+            ex2= BOSS_X - math.cos(angle) * max(WIDTH,HEIGHT)
+            ey2= BOSS_Y - math.sin(angle) * max(WIDTH,HEIGHT)
             self.canvas.create_line(ex2,ey2,ex,ey, fill="#440000", width=40)
             self.canvas.create_line(ex2,ey2,ex,ey, fill=DANGER_COLOR, width=22)
             self.canvas.create_line(ex2,ey2,ex,ey, fill="#ffaaaa", width=6)
 
-            if f == 5:
-                dx = math.cos(self.death_angle); dy = math.sin(self.death_angle)
+            # FIX 2: el rayo verifica colisión en múltiples frames (no solo f==5)
+            # y mata aunque el jugador esté en dash (no se puede esquivar con invencibilidad)
+            # Solo aplica daño una vez por disparo usando un flag
+            if f <= 12 and not getattr(self, "_laser_hit_done", False):
+                dx_ = math.cos(angle); dy_ = math.sin(angle)
                 vx = self.px - BOSS_X; vy = self.py - BOSS_Y
-                perp = abs(vx*dy - vy*dx)
-                if perp < 22 + PLAYER_SIZE//2 and not self.dashing:
-                    self.lives = max(0, self.lives - 2)
-                    self.damage_taken += 4
+                perp = abs(vx*dy_ - vy*dx_)
+                if perp < 22 + PLAYER_SIZE//2:
+                    self._laser_hit_done = True
+                    # FIX 2: mata sin importar estado (ni dash ni invencibilidad)
+                    self.lives = max(0, self.lives - 1)
+                    self.damage_taken += 2
+                    self.invincible = INVINCIBLE_FRAMES * 3  # flash largo para indicar el daño
                     if self.lives <= 0:
                         self._game_over()
                         return
 
             self._draw_player()
-            self._draw_hud()
+            self._draw_lives_and_dash()
 
             if f >= 90:
+                self._laser_hit_done = False  # reset para posibles reuses
                 self.state = "final_countdown"
                 self.death_frame = 0
                 self.final_timer = 20 * FPS
@@ -1461,9 +1480,14 @@ class BossFightMode(GameBase):
                 self.root.after(1000//FPS, self._run_death_sequence)
                 return
 
+        # ── FASE 4: Cuenta atrás 3 golpes (FIX 3: _handle_input activo) ──
         elif self.state == "final_countdown":
+            # FIX 3: el jugador puede moverse y hacer dash normalmente
+            self._handle_input()
+            self.alarm_phase += 0.12
             self.final_timer -= 1
-            if self.final_timer <= 0 and self.final_hits < 3:
+
+            if self.final_timer <= 0 and self.final_hits < 5:
                 self._game_over(); return
 
             target_zoom = 1.0 + self.final_hits * 0.4
@@ -1482,11 +1506,12 @@ class BossFightMode(GameBase):
                 self.obstacles.append(BallBurst(self.canvas,"burst",
                     cx=BOSS_X, cy=BOSS_Y,
                     count=6, speed=2.5, radius=11,
-                    warn_time=25, lifetime=100))
+                    warn_time=25, lifetime=90)) # EDIT -> 100
 
             self._update_obstacles()
             self._check_collisions()
 
+            # Detectar golpe al boss partido con dash
             if self.dashing:
                 for bx_off in [-min(120, int(48*1.5)), min(120, int(48*1.5))]:
                     bxp = BOSS_X + bx_off
@@ -1503,7 +1528,7 @@ class BossFightMode(GameBase):
                             mag = math.hypot(dx,dy) or 1
                             self.dash_dx=dx/mag; self.dash_dy=dy/mag
                             self.dash_frames=8
-                            if self.final_hits >= 3:
+                            if self.final_hits >= 5:
                                 self._victory(); return
             if self.boss_hit_cd > 0: self.boss_hit_cd -= 1
 
@@ -1514,10 +1539,10 @@ class BossFightMode(GameBase):
             pulse = int(128 + 127 * math.sin(self.alarm_phase))
             col = "#{:02x}0000".format(min(255, pulse+100))
             self.canvas.create_text(WIDTH//2, 28,
-                text=f"GOLPÉALO 3 VECES — {secs}s",
+                text=f"GOLPÉALO 5 VECES — {secs}s",
                 font=("Courier", 18, "bold"), fill=col)
             self.canvas.create_text(WIDTH//2, 56,
-                text=f"GOLPES: {self.final_hits} / 3",
+                text=f"GOLPES: {self.final_hits} / 5",
                 font=("Courier", 14, "bold"), fill="#ffaa00")
             self._draw_lives_and_dash()
             for n in self.damage_numbers:
@@ -1750,7 +1775,6 @@ class BossFightMode(GameBase):
 ADMIN_KEY = "minus"
 
 ADMIN_VARS = [
-    # ── JUGADOR ──────────────────────────────────────────────────────
     ("PLAYER_SIZE",      "Tamaño jugador (radio)",
      "Radio en píxeles del jugador",                       6, 40,   1,   "int"),
     ("PLAYER_SPEED",     "Velocidad jugador",
@@ -1764,10 +1788,9 @@ ADMIN_VARS = [
     ("INVINCIBLE_FRAMES","Frames invencible al golpe",
      "Invencibilidad temporal tras recibir daño",          10, 180, 5,   "int"),
     ("MAX_LIVES",        "Vidas máximas",
-     "Vidas máximas que puede tener el jugador",           1, 10,   1,   "int"),
+     "Vidas máximas que puede tener el jugador",           1, 100,   1,   "int"), 
     ("TRAIL_MAX_AGE",    "Duración del rastro (frames)",
      "Cuántos frames dura el rastro de movimiento",        5, 60,   1,   "int"),
-    # ── BOSS ─────────────────────────────────────────────────────────
     ("BOSS_MAX_HP",      "HP del boss",
      "Puntos de vida totales del boss",                    20, 300, 5,   "int"),
     ("BOSS_SIZE",        "Tamaño del boss (radio)",
@@ -1780,7 +1803,6 @@ ADMIN_VARS = [
      "Golpes para matar a cada acompañante",               1, 15,   1,   "int"),
     ("COMPANION_COOLDOWN","Cooldown acompañante (frames)",
      "Frames de espera antes de que reaparezca (60=1s)",   60, 3600,60,  "int"),
-    # ── DIFICULTAD ───────────────────────────────────────────────────
     ("AVALANCHE_EVERY",  "Cada X seg avalancha (normal)",
      "Segundos entre avalanchas en modo normal",           5, 120,  5,   "int"),
     ("FPS",              "FPS del juego",
@@ -1800,7 +1822,6 @@ ADMIN_ATTACKS = [
     ("Ball",         "Bola perseguidora",  "Bola que sigue al jugador"),
 ]
 
-# Tipos de entidades que se pueden spawnear
 ADMIN_SPAWNS = [
     ("Miniboss",    "Minijefe",       MINIBOSS_COLOR,   "Aparece un minijefe en posición aleatoria"),
     ("Companion",   "Acompañante",    COMPANION_COLOR,  "Aparece un acompañante cerca del boss"),
@@ -1810,8 +1831,7 @@ ADMIN_SPAWNS = [
     ("LaserGrid",   "Cuadrícula láser", "#ff8844",      "Cuadrícula de láseres diagonales"),
 ]
 
-# Estadísticas de sesión global para el log
-_SESSION_LOG = []   # lista de {"t": timestamp, "msg": str, "col": color}
+_SESSION_LOG = []
 
 def _log(msg, col="#aaaaaa"):
     _SESSION_LOG.append({"t": time.time(), "msg": msg, "col": col})
@@ -1820,8 +1840,6 @@ def _log(msg, col="#aaaaaa"):
 
 
 class AdminPanel:
-    """Panel de administrador — 5 pestañas: VARS, ESTADO, ATAQUES, SPAWN, MAPA+LOG"""
-
     PW = 620; PH = 520
     PX = (WIDTH  - PW) // 2
     PY = (HEIGHT - PH) // 2
@@ -1857,12 +1875,11 @@ class AdminPanel:
         self._msg     = ""
         self._msg_age = 0
         self._frozen_ids = []
-        self._map_scroll = 0   # scroll del log
+        self._map_scroll = 0
 
         g = globals()
         self._vals = {key: g.get(key, 0) for key, *_ in ADMIN_VARS}
 
-    # ══ toggle / freeze ═══════════════════════════════════════════════
     def toggle(self):
         self.visible = not self.visible
         if self.visible:
@@ -1910,25 +1927,18 @@ class AdminPanel:
             i = getattr(c, method)(*args, **kw)
             self.ids.append(i); return i
 
-        # Panel base con sombra
-        add("create_rectangle", px-4, py-4, px+pw+4, py+ph+4,
-            fill="#000000", outline="")
-        add("create_rectangle", px, py, px+pw, py+ph,
-            fill=self.BG, outline=self.BORDER, width=2)
-
-        # Header degradado simulado
+        add("create_rectangle", px-4, py-4, px+pw+4, py+ph+4, fill="#000000", outline="")
+        add("create_rectangle", px, py, px+pw, py+ph, fill=self.BG, outline=self.BORDER, width=2)
         add("create_rectangle", px, py, px+pw, py+40, fill="#130025", outline="")
         add("create_text", px+pw//2, py+20,
             text="⚙  PANEL DE ADMINISTRADOR  ⚙",
             font=("Courier", 13, "bold"), fill=self.HEADER)
-        add("create_text", px+pw-8, py+20,
-            text=f"[{ADMIN_KEY}]",
+        add("create_text", px+pw-8, py+20, text=f"[{ADMIN_KEY}]",
             font=("Courier", 8), fill=self.DIM, anchor="e")
         add("create_text", px+8, py+20,
             text=f"modo:{self.game.mode if hasattr(self.game,'mode') else '?'}",
             font=("Courier", 8), fill=self.DIM, anchor="w")
 
-        # Tabs (5 pestañas más compactas)
         tab_w = (pw - 16) // len(self.TABS)
         for i, t in enumerate(self.TABS):
             tx = px + 8 + i*(tab_w+1)
@@ -1940,7 +1950,6 @@ class AdminPanel:
                 font=("Courier", 8, "bold"),
                 fill="#ffffff" if is_act else self.DIM)
 
-        # Barra de feedback
         if self._msg and self._msg_age < 100:
             ratio = min(1.0, (100-self._msg_age)/30)
             col = lerp_col(self.DIM, self.VAL_COL, ratio)
@@ -1952,14 +1961,12 @@ class AdminPanel:
 
         add("create_line", px+8, py+67, px+pw-8, py+67, fill="#330044")
 
-        # Contenido de la pestaña activa
         if   self.tab == 0: self._draw_vars(px, py, pw, ph)
         elif self.tab == 1: self._draw_live(px, py, pw, ph)
         elif self.tab == 2: self._draw_attacks(px, py, pw, ph)
         elif self.tab == 3: self._draw_spawn(px, py, pw, ph)
         elif self.tab == 4: self._draw_map_log(px, py, pw, ph)
 
-        # Footer con hints
         add("create_line", px+8, py+ph-26, px+pw-8, py+ph-26, fill="#220033")
         hints = {
             0: "↑↓ Navegar  ←→ Cambiar valor  Enter Aplicar  Tab Pestaña",
@@ -1971,9 +1978,6 @@ class AdminPanel:
         add("create_text", px+pw//2, py+ph-13,
             text=hints[self.tab], font=("Courier", 7), fill=self.DIM)
 
-    # ══════════════════════════════════════════════════════════════════
-    # PESTAÑA 0 — VARIABLES GLOBALES (con más vars y preview de color)
-    # ══════════════════════════════════════════════════════════════════
     def _draw_vars(self, px, py, pw, ph):
         c = self.canvas
         def add(m, *a, **k): i=getattr(c,m)(*a,**k); self.ids.append(i); return i
@@ -1989,16 +1993,11 @@ class AdminPanel:
             ry = top + idx*row_h
             sel = (vi == self.sel)
 
-            bg_col = self.SEL if sel else self.BG
             add("create_rectangle", px+8, ry, px+pw-8, ry+row_h-2,
-                fill=bg_col,
+                fill=self.SEL if sel else self.BG,
                 outline=self.SEL_BD if sel else "#1a0028")
-
-            # Número de índice
-            add("create_text", px+16, ry+row_h//2,
-                text=f"{vi+1:02d}",
+            add("create_text", px+16, ry+row_h//2, text=f"{vi+1:02d}",
                 font=("Courier",7), fill=self.DIM, anchor="w")
-
             add("create_text", px+40, ry+10, text=label,
                 font=("Courier",9,"bold"),
                 fill="#ffffff" if sel else self.TXT, anchor="w")
@@ -2008,24 +2007,18 @@ class AdminPanel:
             val = self._vals.get(key, vmin)
             pct = (val-vmin)/max(1,vmax-vmin)
             bx = px+pw-200; by_=ry+16; bw=80
-            add("create_rectangle", bx, by_, bx+bw, by_+8,
-                fill="#1a0028", outline="#330044")
+            add("create_rectangle", bx, by_, bx+bw, by_+8, fill="#1a0028", outline="#330044")
             if pct > 0:
-                bar_col = lerp_col("#0066aa", self.VAL_COL, pct)
                 add("create_rectangle", bx, by_, bx+int(bw*pct), by_+8,
-                    fill=bar_col, outline="")
+                    fill=lerp_col("#0066aa", self.VAL_COL, pct), outline="")
             ac = "#ff00ff" if sel else self.DIM
-            add("create_text", px+pw-115, ry+14, text="◀",
-                font=("Courier",11,"bold"), fill=ac)
-            add("create_text", px+pw-18,  ry+14, text="▶",
-                font=("Courier",11,"bold"), fill=ac)
-            # Valor en caja resaltada
+            add("create_text", px+pw-115, ry+14, text="◀", font=("Courier",11,"bold"), fill=ac)
+            add("create_text", px+pw-18,  ry+14, text="▶", font=("Courier",11,"bold"), fill=ac)
             add("create_rectangle", px+pw-110, ry+8, px+pw-25, ry+26,
                 fill="#1a0028" if not sel else "#2a0044", outline="#330044")
-            add("create_text", px+pw-68,  ry+17, text=str(val),
+            add("create_text", px+pw-68, ry+17, text=str(val),
                 font=("Courier",10,"bold"), fill=self.VAL_COL)
 
-        # Scrollbar
         if len(ADMIN_VARS) > vis and max_sc > 0:
             sx=px+pw-5; st=top; sb=top+vis*row_h; sh=sb-st
             th=max(18, int(sh*vis/len(ADMIN_VARS)))
@@ -2033,17 +2026,12 @@ class AdminPanel:
             add("create_rectangle", sx, st, sx+4, sb, fill="#1a0028", outline="")
             add("create_rectangle", sx, ty, sx+4, ty+th, fill=self.BORDER, outline="")
 
-        # Botón aplicar
         by2=py+ph-52
         add("create_rectangle", px+pw//2-110, by2, px+pw//2+110, by2+22,
             fill="#1a002a", outline=self.BORDER)
-        add("create_text", px+pw//2, by2+11,
-            text="↵  APLICAR TODOS LOS CAMBIOS AL JUEGO",
+        add("create_text", px+pw//2, by2+11, text="↵  APLICAR TODOS LOS CAMBIOS AL JUEGO",
             font=("Courier",8,"bold"), fill=self.HEADER)
 
-    # ══════════════════════════════════════════════════════════════════
-    # PESTAÑA 1 — ESTADO LIVE (+ botones mejorados y más info)
-    # ══════════════════════════════════════════════════════════════════
     def _draw_live(self, px, py, pw, ph):
         c   = self.canvas
         g   = self.game
@@ -2052,24 +2040,19 @@ class AdminPanel:
         top = py+72; col_w=(pw-24)//2
 
         def stat_row(lx, ly, label, val_str, col, bar_pct=None, bar_col=None, editable=False):
-            add("create_rectangle", lx, ly, lx+col_w, ly+34,
-                fill="#0f0020", outline="#220033")
+            add("create_rectangle", lx, ly, lx+col_w, ly+34, fill="#0f0020", outline="#220033")
             lbl_s = ("✏ " if editable else "  ") + label
-            add("create_text", lx+8, ly+8,  text=lbl_s,
-                font=("Courier",8), fill=self.DIM if not editable else "#aaaaff",
-                anchor="w")
+            add("create_text", lx+8, ly+8, text=lbl_s,
+                font=("Courier",8), fill=self.DIM if not editable else "#aaaaff", anchor="w")
             add("create_text", lx+col_w-8, ly+8, text=val_str,
                 font=("Courier",9,"bold"), fill=col, anchor="e")
             if bar_pct is not None:
                 bx2=lx+8; bw2=col_w-16; bhy=ly+22
-                add("create_rectangle", bx2, bhy, bx2+bw2, bhy+5,
-                    fill="#1a0028", outline="")
+                add("create_rectangle", bx2, bhy, bx2+bw2, bhy+5, fill="#1a0028", outline="")
                 if bar_pct > 0:
                     add("create_rectangle", bx2, bhy,
-                        bx2+int(bw2*min(1,bar_pct)), bhy+5,
-                        fill=bar_col or col, outline="")
+                        bx2+int(bw2*min(1,bar_pct)), bhy+5, fill=bar_col or col, outline="")
 
-        # ─ Columna izquierda: Jugador ─
         lx0 = px+8; lx1 = px+16+col_w
         ly  = top
 
@@ -2079,16 +2062,13 @@ class AdminPanel:
 
         lives_pct = g.lives/MAX_LIVES if hasattr(g,"lives") else 0
         lives_col = self.LIVE_G if lives_pct>0.5 else self.LIVE_Y if lives_pct>0.25 else self.LIVE_R
-        stat_row(lx0, ly, "Vidas",
-                 f"{g.lives if hasattr(g,'lives') else '?'} / {MAX_LIVES}",
+        stat_row(lx0, ly, "Vidas", f"{g.lives if hasattr(g,'lives') else '?'} / {MAX_LIVES}",
                  lives_col, lives_pct, lives_col, editable=True)
         ly += 38
 
         invic = getattr(g,"invincible",0)
-        stat_row(lx0, ly, "Invencibilidad",
-                 f"{invic}f" if invic>0 else "—",
-                 self.LIVE_Y if invic>0 else self.DIM, invic/max(1,INVINCIBLE_FRAMES),
-                 self.LIVE_Y)
+        stat_row(lx0, ly, "Invencibilidad", f"{invic}f" if invic>0 else "—",
+                 self.LIVE_Y if invic>0 else self.DIM, invic/max(1,INVINCIBLE_FRAMES), self.LIVE_Y)
         ly += 38
 
         dash_cd = getattr(g,"dash_cooldown",0)
@@ -2100,27 +2080,20 @@ class AdminPanel:
         ly += 38
 
         stat_row(lx0, ly, "Pos jugador",
-                 f"({int(getattr(g,'px',0))},{int(getattr(g,'py',0))})",
-                 self.DIM)
+                 f"({int(getattr(g,'px',0))},{int(getattr(g,'py',0))})", self.DIM)
         ly += 38
 
-        stat_row(lx0, ly, "Obstáculos",
-                 str(len(getattr(g,"obstacles",[]))),
+        stat_row(lx0, ly, "Obstáculos", str(len(getattr(g,"obstacles",[]))),
                  self.LIVE_Y if len(getattr(g,"obstacles",[]))>8 else self.LIVE_G)
         ly += 38
 
         elapsed = int(time.time() - getattr(g,"start_time",time.time()))
-        stat_row(lx0, ly, "Tiempo partida",
-                 f"{elapsed//60:02d}:{elapsed%60:02d}",
-                 self.LIVE_B)
+        stat_row(lx0, ly, "Tiempo partida", f"{elapsed//60:02d}:{elapsed%60:02d}", self.LIVE_B)
         ly += 38
 
-        # Score / dificultad
         diff = getattr(g,"difficulty",1.0)
-        stat_row(lx0, ly, "Dificultad",
-                 f"{diff:.2f}x", self.LIVE_Y, (diff-1)/4, self.LIVE_R)
+        stat_row(lx0, ly, "Dificultad", f"{diff:.2f}x", self.LIVE_Y, (diff-1)/4, self.LIVE_R)
 
-        # ─ Columna derecha ─
         add("create_text", lx1+col_w//2, top-2, text="── BOSS / MODO ──",
             font=("Courier",9,"bold"), fill=self.HEADER)
         ry2 = top+14
@@ -2128,66 +2101,52 @@ class AdminPanel:
         if hasattr(g,"boss_hp"):
             bhp_pct = g.boss_hp/max(1,BOSS_MAX_HP)
             bhp_col = self.LIVE_G if bhp_pct>0.66 else self.LIVE_Y if bhp_pct>0.33 else self.LIVE_R
-            stat_row(lx1, ry2, "Boss HP",
-                     f"{g.boss_hp} / {BOSS_MAX_HP}",
+            stat_row(lx1, ry2, "Boss HP", f"{g.boss_hp} / {BOSS_MAX_HP}",
                      bhp_col, bhp_pct, bhp_col, editable=True)
             ry2 += 38
 
             phase_col = {1:self.LIVE_G, 2:self.LIVE_Y, 3:self.LIVE_R}.get(g.boss_phase, self.DIM)
-            stat_row(lx1, ry2, "Fase boss",
-                     f"FASE {g.boss_phase} / 3",
-                     phase_col)
+            stat_row(lx1, ry2, "Fase boss", f"FASE {g.boss_phase} / 3", phase_col)
             ry2 += 38
 
-            stat_row(lx1, ry2, "Golpes al boss",
-                     str(getattr(g,"boss_hits",0)), self.LIVE_B)
+            stat_row(lx1, ry2, "Golpes al boss", str(getattr(g,"boss_hits",0)), self.LIVE_B)
             ry2 += 38
 
-            stat_row(lx1, ry2, "Daño recibido",
-                     str(getattr(g,"damage_taken",0)),
+            stat_row(lx1, ry2, "Daño recibido", str(getattr(g,"damage_taken",0)),
                      self.LIVE_R if getattr(g,"damage_taken",0)>3 else self.LIVE_Y)
             ry2 += 38
 
-            stat_row(lx1, ry2, "Acompañantes",
-                     str(len(getattr(g,"companions",[]))),
+            stat_row(lx1, ry2, "Acompañantes", str(len(getattr(g,"companions",[]))),
                      self.LIVE_Y if getattr(g,"companions",[]) else self.DIM)
             ry2 += 38
 
             in_tr = getattr(g,"in_transition",False)
             mini  = getattr(g,"miniboss",None)
             if in_tr and mini:
-                stat_row(lx1, ry2, "Minijefe HP",
-                         f"{mini.hp} / {MINI_HP}",
+                stat_row(lx1, ry2, "Minijefe HP", f"{mini.hp} / {MINI_HP}",
                          self.LIVE_R, mini.hp/max(1,MINI_HP), self.LIVE_R)
             else:
-                stat_row(lx1, ry2, "Transición",
-                         "ACTIVA" if in_tr else "No",
+                stat_row(lx1, ry2, "Transición", "ACTIVA" if in_tr else "No",
                          self.LIVE_Y if in_tr else self.DIM)
             ry2 += 38
 
-            stat_row(lx1, ry2, "Dashes usados",
-                     str(getattr(g,"dashes_used",0)), self.LIVE_B)
+            stat_row(lx1, ry2, "Dashes usados", str(getattr(g,"dashes_used",0)), self.LIVE_B)
         else:
-            # Modo normal
             stat_row(lx1, ry2, "Score", str(getattr(g,"score",0)), self.LIVE_B)
             ry2 += 38
             aval_t = getattr(g,"avalanche_timer",0)
             next_a = getattr(g,"next_avalanche",AVALANCHE_EVERY*FPS)
             frames_left = max(0, next_a - aval_t)
             secs_left = math.ceil(frames_left / FPS)
-            stat_row(lx1, ry2, "Próx. avalancha",
-                     f"{secs_left}s",
+            stat_row(lx1, ry2, "Próx. avalancha", f"{secs_left}s",
                      self.LIVE_R if secs_left<=5 else self.LIVE_Y,
                      1.0 - frames_left/max(1,next_a), self.LIVE_R)
             ry2 += 38
-            stat_row(lx1, ry2, "Nivel actual",
-                     f"{int(diff)} ({diff:.2f}x)",
+            stat_row(lx1, ry2, "Nivel actual", f"{int(diff)} ({diff:.2f}x)",
                      self.LIVE_Y, (diff-1)/4, self.LIVE_R)
 
-        # ─ Botones de acción rápida (2 filas) ─
         btn_y = py+ph-74
-        add("create_text", px+pw//2, btn_y-10,
-            text="─── ACCIONES RÁPIDAS ───",
+        add("create_text", px+pw//2, btn_y-10, text="─── ACCIONES RÁPIDAS ───",
             font=("Courier",8,"bold"), fill=self.DIM)
 
         actions_row1 = [
@@ -2209,19 +2168,14 @@ class AdminPanel:
             for i,(lbl,col3,act) in enumerate(actions):
                 bx3 = px+8+i*bw3
                 by3 = btn_y + row_idx*26
-                add("create_rectangle", bx3, by3, bx3+bw3-2, by3+22,
-                    fill="#0f0020", outline=col3)
-                add("create_text", bx3+bw3//2, by3+11,
-                    text=lbl, font=("Courier",6,"bold"), fill=col3)
+                add("create_rectangle", bx3, by3, bx3+bw3-2, by3+22, fill="#0f0020", outline=col3)
+                add("create_text", bx3+bw3//2, by3+11, text=lbl, font=("Courier",6,"bold"), fill=col3)
 
         self._live_actions_r1 = actions_row1
         self._live_actions_r2 = actions_row2
         self._live_btn_y = btn_y
         self._live_bw = bw3
 
-    # ══════════════════════════════════════════════════════════════════
-    # PESTAÑA 2 — ATAQUES (con selector de intensidad)
-    # ══════════════════════════════════════════════════════════════════
     def _draw_attacks(self, px, py, pw, ph):
         c = self.canvas
         def add(m,*a,**k): i=getattr(c,m)(*a,**k); self.ids.append(i); return i
@@ -2235,32 +2189,23 @@ class AdminPanel:
             add("create_rectangle", bx, by, bx+col_w, by+row_h-4,
                 fill="#200015" if sel else "#100018",
                 outline=self.BTN_ATK if sel else "#440044", width=2 if sel else 1)
-            # Icono de tipo
             icon = {"BeamH":"═","BeamV":"║","CircleWave":"◎","BallBurst":"✦",
                     "RotatingLaser":"↺","BossSpiral":"🌀","BossShockwave":"◉",
                     "BossCross":"✚","DangerZone":"▭","Ball":"●"}.get(atk_cls,"?")
-            add("create_text", bx+14, by+row_h//2,
-                text=icon, font=("Courier",14),
+            add("create_text", bx+14, by+row_h//2, text=icon, font=("Courier",14),
                 fill=self.BTN_ATK if sel else self.BTN_ATK2)
-            add("create_text", bx+32, by+12,
-                text=lbl, font=("Courier",9,"bold"),
+            add("create_text", bx+32, by+12, text=lbl, font=("Courier",9,"bold"),
                 fill=self.BTN_ATK if sel else self.BTN_ATK2, anchor="w")
-            add("create_text", bx+32, by+26,
-                text=desc, font=("Courier",7), fill=self.DIM, anchor="w")
+            add("create_text", bx+32, by+26, text=desc, font=("Courier",7), fill=self.DIM, anchor="w")
             if sel:
-                add("create_text", bx+col_w-6, by+row_h//2,
-                    text="✓", font=("Courier",12,"bold"),
-                    fill=self.BTN_ATK, anchor="e")
+                add("create_text", bx+col_w-6, by+row_h//2, text="✓",
+                    font=("Courier",12,"bold"), fill=self.BTN_ATK, anchor="e")
 
-        # Panel inferior: botón "Lanzar todos los seleccionados" y "Lanzar x3"
         btn_y = top + (len(ADMIN_ATTACKS)//cols + 1)*row_h
         add("create_text", px+pw//2, btn_y+2,
             text="Click = lanzar    Selección múltiple no disponible en esta versión",
             font=("Courier",7), fill=self.DIM)
 
-    # ══════════════════════════════════════════════════════════════════
-    # PESTAÑA 3 — SPAWN DE ENTIDADES (NUEVA)
-    # ══════════════════════════════════════════════════════════════════
     def _draw_spawn(self, px, py, pw, ph):
         c = self.canvas
         g = self.game
@@ -2275,18 +2220,13 @@ class AdminPanel:
         for idx,(spawn_id, lbl, col3, desc) in enumerate(ADMIN_SPAWNS):
             sc = idx%cols; row = idx//cols
             bx = px+8+sc*(col_w+8); by = top+14+row*row_h
-            add("create_rectangle", bx, by, bx+col_w, by+row_h-4,
-                fill="#100020", outline=col3, width=1)
-            add("create_text", bx+8, by+14, text=lbl,
-                font=("Courier",10,"bold"), fill=col3, anchor="w")
-            add("create_text", bx+8, by+30, text=desc,
-                font=("Courier",7), fill=self.DIM, anchor="w")
+            add("create_rectangle", bx, by, bx+col_w, by+row_h-4, fill="#100020", outline=col3, width=1)
+            add("create_text", bx+8, by+14, text=lbl, font=("Courier",10,"bold"), fill=col3, anchor="w")
+            add("create_text", bx+8, by+30, text=desc, font=("Courier",7), fill=self.DIM, anchor="w")
 
-        # Sección especial: forzar fase del boss
         fy = top + 14 + (len(ADMIN_SPAWNS)//cols + 1)*row_h + 4
         if hasattr(g,"boss_phase"):
-            add("create_text", px+pw//2, fy,
-                text="─── FASE DEL BOSS ───",
+            add("create_text", px+pw//2, fy, text="─── FASE DEL BOSS ───",
                 font=("Courier",9,"bold"), fill=self.DIM)
             fby = fy+18
             for fi, (flbl, fcol) in enumerate([
@@ -2295,15 +2235,12 @@ class AdminPanel:
                 ("FASE 3 (1%HP)",  "#ff0000"),
             ]):
                 fbx = px+8+fi*(pw//3-4)
-                add("create_rectangle", fbx, fby, fbx+pw//3-8, fby+22,
-                    fill="#120018", outline=fcol)
-                add("create_text", fbx+(pw//3-8)//2, fby+11,
-                    text=flbl, font=("Courier",7,"bold"), fill=fcol)
+                add("create_rectangle", fbx, fby, fbx+pw//3-8, fby+22, fill="#120018", outline=fcol)
+                add("create_text", fbx+(pw//3-8)//2, fby+11, text=flbl,
+                    font=("Courier",7,"bold"), fill=fcol)
 
-        # Sección: control de velocidad del juego (slow-mo / turbo)
         sy = fy + (50 if hasattr(g,"boss_phase") else 0) + 8
-        add("create_text", px+pw//2, sy,
-            text="─── VELOCIDAD DEL JUEGO ───",
+        add("create_text", px+pw//2, sy, text="─── VELOCIDAD DEL JUEGO ───",
             font=("Courier",9,"bold"), fill=self.DIM)
         speed_btns = [
             ("0.25x SLOW",  "#6688ff", "speed_025"),
@@ -2314,12 +2251,9 @@ class AdminPanel:
         ]
         sbw = (pw-16)//len(speed_btns)
         for i,(slbl,scol,sact) in enumerate(speed_btns):
-            sbx = px+8+i*sbw
-            sby = sy+14
-            add("create_rectangle", sbx, sby, sbx+sbw-2, sby+22,
-                fill="#0a0018", outline=scol)
-            add("create_text", sbx+sbw//2, sby+11,
-                text=slbl, font=("Courier",6,"bold"), fill=scol)
+            sbx = px+8+i*sbw; sby = sy+14
+            add("create_rectangle", sbx, sby, sbx+sbw-2, sby+22, fill="#0a0018", outline=scol)
+            add("create_text", sbx+sbw//2, sby+11, text=slbl, font=("Courier",6,"bold"), fill=scol)
 
         self._spawn_btn_top = top+14
         self._spawn_row_h = row_h
@@ -2331,27 +2265,18 @@ class AdminPanel:
         self._spawn_speed_y = sy+14
         self._spawn_speed_bw = sbw
 
-    # ══════════════════════════════════════════════════════════════════
-    # PESTAÑA 4 — MINIMAP + LOG DE EVENTOS (NUEVA)
-    # ══════════════════════════════════════════════════════════════════
     def _draw_map_log(self, px, py, pw, ph):
         c = self.canvas
         g = self.game
         def add(m,*a,**k): i=getattr(c,m)(*a,**k); self.ids.append(i); return i
 
         top = py+72
-
-        # ─ MINIMAP (mitad izquierda) ─
         MAP_W = 240; MAP_H = 180
         mx = px+12; my = top+14
-        add("create_rectangle", mx-2, my-16, mx+MAP_W+2, my+MAP_H+2,
-            fill="#000000", outline=self.BORDER)
-        add("create_text", mx+MAP_W//2, my-8,
-            text="MINIMAP", font=("Courier",8,"bold"), fill=self.BORDER)
-        add("create_rectangle", mx, my, mx+MAP_W, my+MAP_H,
-            fill="#0a000f", outline="")
+        add("create_rectangle", mx-2, my-16, mx+MAP_W+2, my+MAP_H+2, fill="#000000", outline=self.BORDER)
+        add("create_text", mx+MAP_W//2, my-8, text="MINIMAP", font=("Courier",8,"bold"), fill=self.BORDER)
+        add("create_rectangle", mx, my, mx+MAP_W, my+MAP_H, fill="#0a000f", outline="")
 
-        # Grid del minimap
         for gx in range(0, MAP_W, MAP_W//8):
             add("create_line", mx+gx, my, mx+gx, my+MAP_H, fill="#160020")
         for gy in range(0, MAP_H, MAP_H//6):
@@ -2360,10 +2285,9 @@ class AdminPanel:
         def map_x(wx): return mx + int(wx * MAP_W / WIDTH)
         def map_y(wy): return my + int(wy * MAP_H / HEIGHT)
 
-        # Obstáculos en el minimap
         for obs in getattr(g,"obstacles",[]):
             try:
-                if hasattr(obs,"x") and hasattr(obs,"y"):  # Ball
+                if hasattr(obs,"x") and hasattr(obs,"y"):
                     ox,oy = map_x(obs.x), map_y(obs.y)
                     col = "#ff4444" if obs.active else "#884444"
                     add("create_oval", ox-3,oy-3,ox+3,oy+3, fill=col, outline="")
@@ -2386,56 +2310,35 @@ class AdminPanel:
             except Exception:
                 pass
 
-        # Boss en el minimap
         if hasattr(g,"boss_hp"):
             bx_m,by_m = map_x(BOSS_X), map_y(BOSS_Y)
-            add("create_oval", bx_m-6,by_m-6,bx_m+6,by_m+6,
-                fill=BOSS_COLOR, outline=BOSS_OUTLINE, width=1)
+            add("create_oval", bx_m-6,by_m-6,bx_m+6,by_m+6, fill=BOSS_COLOR, outline=BOSS_OUTLINE, width=1)
 
-        # Minijefe
         if hasattr(g,"miniboss") and g.miniboss and g.miniboss.alive:
             mmx,mmy = map_x(g.miniboss.x), map_y(g.miniboss.y)
-            add("create_oval", mmx-4,mmy-4,mmx+4,mmy+4,
-                fill=MINIBOSS_COLOR, outline="")
+            add("create_oval", mmx-4,mmy-4,mmx+4,mmy+4, fill=MINIBOSS_COLOR, outline="")
 
-        # Acompañantes
         for comp in getattr(g,"companions",[]):
             cmx,cmy = map_x(comp.x), map_y(comp.y)
-            add("create_oval", cmx-3,cmy-3,cmx+3,cmy+3,
-                fill=COMPANION_COLOR, outline="")
+            add("create_oval", cmx-3,cmy-3,cmx+3,cmy+3, fill=COMPANION_COLOR, outline="")
 
-        # Jugador
         ppx,ppy = map_x(getattr(g,"px",WIDTH//2)), map_y(getattr(g,"py",HEIGHT//2))
-        add("create_oval", ppx-5,ppy-5,ppx+5,ppy+5,
-            fill=PLAYER_COLOR, outline=PLAYER_OUTLINE, width=1)
-        # Cruz sobre el jugador para visibilidad
+        add("create_oval", ppx-5,ppy-5,ppx+5,ppy+5, fill=PLAYER_COLOR, outline=PLAYER_OUTLINE, width=1)
         add("create_line", ppx-7,ppy,ppx+7,ppy, fill=PLAYER_COLOR, width=1)
         add("create_line", ppx,ppy-7,ppx,ppy+7, fill=PLAYER_COLOR, width=1)
 
-        # Leyenda del minimap
         ley_y = my+MAP_H+6
-        legend = [
-            (PLAYER_COLOR, "Jugador"),
-            (BOSS_COLOR,   "Boss"),
-            (DANGER_COLOR, "Obstáculo"),
-            (MINIBOSS_COLOR,"Minijefe"),
-        ]
+        legend = [(PLAYER_COLOR,"Jugador"),(BOSS_COLOR,"Boss"),(DANGER_COLOR,"Obstáculo"),(MINIBOSS_COLOR,"Minijefe")]
         for li,(lc,lt) in enumerate(legend):
             lbx = mx + li*(MAP_W//4)
             add("create_oval", lbx, ley_y, lbx+7, ley_y+7, fill=lc, outline="")
-            add("create_text", lbx+10, ley_y+3, text=lt,
-                font=("Courier",6), fill=self.DIM, anchor="w")
+            add("create_text", lbx+10, ley_y+3, text=lt, font=("Courier",6), fill=self.DIM, anchor="w")
 
-        # ─ ESTADÍSTICAS DE SESIÓN ─
-        sy = my + MAP_H + 24
-        stats_w = MAP_W
-        add("create_text", mx+stats_w//2, sy,
-            text="ESTADÍSTICAS DE SESIÓN",
+        sy = my + MAP_H + 24; stats_w = MAP_W
+        add("create_text", mx+stats_w//2, sy, text="ESTADÍSTICAS DE SESIÓN",
             font=("Courier",8,"bold"), fill=self.LIVE_B)
         sy += 14
-        add("create_rectangle", mx, sy, mx+stats_w, sy+70,
-            fill="#0a000f", outline="#220033")
-
+        add("create_rectangle", mx, sy, mx+stats_w, sy+70, fill="#0a000f", outline="#220033")
         sess_stats = [
             ("Obstáculos activos", str(len(getattr(g,"obstacles",[]))), self.LIVE_Y),
             ("Score/Tiempo",       f"{getattr(g,'score',0)}s", self.LIVE_B),
@@ -2443,28 +2346,17 @@ class AdminPanel:
             ("Frames totales",     str(getattr(g,"frame",0)), self.DIM),
         ]
         for si,(slbl,sval,scol) in enumerate(sess_stats):
-            add("create_text", mx+4, sy+4+si*16, text=slbl,
-                font=("Courier",7), fill=self.DIM, anchor="w")
-            add("create_text", mx+stats_w-4, sy+4+si*16, text=sval,
-                font=("Courier",7,"bold"), fill=scol, anchor="e")
+            add("create_text", mx+4, sy+4+si*16, text=slbl, font=("Courier",7), fill=self.DIM, anchor="w")
+            add("create_text", mx+stats_w-4, sy+4+si*16, text=sval, font=("Courier",7,"bold"), fill=scol, anchor="e")
 
-        # ─ LOG DE EVENTOS (mitad derecha) ─
-        lx = px+12+MAP_W+14
-        lw = pw - MAP_W - 38
-        add("create_rectangle", lx-2, my-16, lx+lw+2, my+MAP_H+2,
-            fill="#000000", outline=self.BORDER)
-        add("create_text", lx+lw//2, my-8,
-            text="LOG DE EVENTOS", font=("Courier",8,"bold"), fill=self.BORDER)
-        add("create_rectangle", lx, my, lx+lw, my+MAP_H,
-            fill="#050010", outline="")
+        lx = px+12+MAP_W+14; lw = pw - MAP_W - 38
+        add("create_rectangle", lx-2, my-16, lx+lw+2, my+MAP_H+2, fill="#000000", outline=self.BORDER)
+        add("create_text", lx+lw//2, my-8, text="LOG DE EVENTOS", font=("Courier",8,"bold"), fill=self.BORDER)
+        add("create_rectangle", lx, my, lx+lw, my+MAP_H, fill="#050010", outline="")
 
-        # Filtros de log
         filter_y = my+MAP_H+4
-        add("create_text", lx+lw//2, filter_y+6,
-            text="↑↓ para scrollear el log",
-            font=("Courier",7), fill=self.DIM)
+        add("create_text", lx+lw//2, filter_y+6, text="↑↓ para scrollear el log", font=("Courier",7), fill=self.DIM)
 
-        # Mostrar entradas del log
         vis_lines = 14
         log_entries = _SESSION_LOG
         max_scroll = max(0, len(log_entries) - vis_lines)
@@ -2476,35 +2368,26 @@ class AdminPanel:
             ely = my + 4 + li*12
             elapsed = int(time.time() - entry["t"])
             ts = f"+{elapsed:3d}s" if elapsed < 3600 else "long"
-            add("create_text", lx+4, ely,
-                text=ts, font=("Courier",6), fill="#554466", anchor="w")
-            add("create_text", lx+38, ely,
-                text=entry["msg"][:30], font=("Courier",7,"bold"),
-                fill=entry["col"], anchor="w")
+            add("create_text", lx+4, ely, text=ts, font=("Courier",6), fill="#554466", anchor="w")
+            add("create_text", lx+38, ely, text=entry["msg"][:30],
+                font=("Courier",7,"bold"), fill=entry["col"], anchor="w")
 
         if not log_entries:
-            add("create_text", lx+lw//2, my+MAP_H//2,
-                text="Sin eventos registrados",
+            add("create_text", lx+lw//2, my+MAP_H//2, text="Sin eventos registrados",
                 font=("Courier",8), fill=self.DIM)
 
-        # Scrollbar del log
         if len(log_entries) > vis_lines:
-            sbx = lx+lw-4; sbt = my; sbb = my+MAP_H
-            sbh = sbb-sbt
+            sbx = lx+lw-4; sbt = my; sbb = my+MAP_H; sbh = sbb-sbt
             th2 = max(14, int(sbh*vis_lines/len(log_entries)))
             ty2 = sbt+int((sbh-th2)*(max_scroll-self._map_scroll)/max(1,max_scroll))
             add("create_rectangle", sbx, sbt, sbx+4, sbb, fill="#110022", outline="")
             add("create_rectangle", sbx, ty2, sbx+4, ty2+th2, fill=self.BORDER, outline="")
 
-        # Botón limpiar log
         clr_y = my+MAP_H+4
-        add("create_rectangle", lx+lw-68, clr_y, lx+lw, clr_y+16,
-            fill="#200010", outline="#882222")
-        add("create_text", lx+lw-34, clr_y+8,
-            text="Limpiar log", font=("Courier",6), fill="#aa4444")
+        add("create_rectangle", lx+lw-68, clr_y, lx+lw, clr_y+16, fill="#200010", outline="#882222")
+        add("create_text", lx+lw-34, clr_y+8, text="Limpiar log", font=("Courier",6), fill="#aa4444")
         self._log_clear_rect = (lx+lw-68, clr_y, lx+lw, clr_y+16)
 
-    # ══ Eventos de teclado ════════════════════════════════════════════
     def handle_key(self, keysym):
         if not self.visible: return
         if keysym == "Tab":
@@ -2525,19 +2408,16 @@ class AdminPanel:
         if self.sel < self.scroll:         self.scroll -= 1
         if self.sel >= self.scroll+10:     self.scroll += 1
 
-    # ══ Eventos de click ══════════════════════════════════════════════
     def handle_click(self, x, y):
         if not self.visible: return
         px, py, pw, ph = self.PX, self.PY, self.PW, self.PH
 
-        # Clicks en tabs
         tab_w = (pw-16)//len(self.TABS)
         for i in range(len(self.TABS)):
             tx = px+8+i*(tab_w+1)
             if tx<=x<=tx+tab_w-1 and py+42<=y<=py+60:
                 self.tab=i; self._draw(); return
 
-        # ─ Pestaña 0: Variables ─
         if self.tab==0:
             top=py+72; row_h=40; vis=10
             for idx in range(vis):
@@ -2553,19 +2433,16 @@ class AdminPanel:
             if px+pw//2-110<=x<=px+pw//2+110 and by2<=y<=by2+22:
                 self._apply_all(); self._draw(); return
 
-        # ─ Pestaña 1: Estado live ─
         elif self.tab==1:
             if hasattr(self,"_live_btn_y"):
                 bw3=self._live_bw; btn_y=self._live_btn_y
-                for row_idx, actions in enumerate([self._live_actions_r1,
-                                                    self._live_actions_r2]):
+                for row_idx, actions in enumerate([self._live_actions_r1, self._live_actions_r2]):
                     for i,(_,_,act) in enumerate(actions):
                         bx3=self.PX+8+i*bw3
                         by3=btn_y+row_idx*26
                         if bx3<=x<=bx3+bw3-2 and by3<=y<=by3+22:
                             self._do_live_action(act); self._draw(); return
 
-        # ─ Pestaña 2: Ataques ─
         elif self.tab==2:
             top=py+72; cols=2; col_w=(pw-24)//2; row_h=46
             for idx,(atk_cls,*_) in enumerate(ADMIN_ATTACKS):
@@ -2576,7 +2453,6 @@ class AdminPanel:
                     self._launch_selected()
                     self._draw(); return
 
-        # ─ Pestaña 3: Spawn ─
         elif self.tab==3:
             top=self._spawn_btn_top; row_h=self._spawn_row_h
             cols=self._spawn_cols; col_w=self._spawn_col_w
@@ -2585,22 +2461,18 @@ class AdminPanel:
                 bx=px+8+sc*(col_w+8); by=top+row*row_h
                 if bx<=x<=bx+col_w and by<=y<=by+row_h-4:
                     self._do_spawn(spawn_id); self._draw(); return
-            # Botones de fase del boss
             if hasattr(self.game,"boss_phase") and self._spawn_phase_fby:
                 fby = self._spawn_phase_fby
                 for fi,(phase_val,fhp) in enumerate([(67,1),(34,2),(1,3)]):
                     fbx = px+8+fi*(pw//3-4)
                     if fbx<=x<=fbx+pw//3-8 and fby<=y<=fby+22:
                         self._force_boss_phase(phase_val); self._draw(); return
-            # Botones de velocidad
             if hasattr(self,"_spawn_speed_btns"):
                 for i,(_,_,sact) in enumerate(self._spawn_speed_btns):
-                    sbx = px+8+i*self._spawn_speed_bw
-                    sby = self._spawn_speed_y
+                    sbx = px+8+i*self._spawn_speed_bw; sby = self._spawn_speed_y
                     if sbx<=x<=sbx+self._spawn_speed_bw-2 and sby<=y<=sby+22:
                         self._do_speed(sact); self._draw(); return
 
-        # ─ Pestaña 4: Mapa/Log ─
         elif self.tab==4:
             if hasattr(self,"_log_clear_rect"):
                 lx1,ly1,lx2,ly2 = self._log_clear_rect
@@ -2609,7 +2481,6 @@ class AdminPanel:
                     self._msg="🗑 Log limpiado"; self._msg_age=0
                     self._draw(); return
 
-    # ══ Acciones live ═════════════════════════════════════════════════
     def _do_live_action(self, act):
         g = self.game
         if act=="give_life":
@@ -2657,40 +2528,28 @@ class AdminPanel:
             self._msg=f"🗑 {n} obstáculos eliminados"
             _log(f"Eliminados {n} obstáculos", AVAL_COLOR)
         elif act=="teleport_center":
-            g.px = float(WIDTH//2)
-            g.py = float(HEIGHT//2)
-            g.trail = []
+            g.px = float(WIDTH//2); g.py = float(HEIGHT//2); g.trail = []
             self._msg="🎯 Teletransportado al centro"
             _log("Teletransport → centro", DASH_COLOR)
         self._msg_age=0
 
-    # ══ Spawn de entidades ════════════════════════════════════════════
     def _do_spawn(self, spawn_id):
-        g = self.game
-        canvas = g.canvas
+        g = self.game; canvas = g.canvas
         if spawn_id == "Miniboss":
             if not hasattr(g,"miniboss"):
-                self._msg = "Solo disponible en Boss Fight"
-                return
-            mx = BOSS_X + random.choice([-220,220])
-            my = BOSS_Y + random.choice([-100,100])
+                self._msg = "Solo disponible en Boss Fight"; return
+            mx = BOSS_X + random.choice([-220,220]); my = BOSS_Y + random.choice([-100,100])
             if g.miniboss is None:
                 g.miniboss = Miniboss(canvas, mx, my, difficulty=g.difficulty)
-                _log("Minijefe spawneado", MINIBOSS_COLOR)
-                self._msg = "🎯 Minijefe spawnado"
-            else:
-                self._msg = "Ya hay un minijefe activo"
-
+                _log("Minijefe spawneado", MINIBOSS_COLOR); self._msg = "🎯 Minijefe spawnado"
+            else: self._msg = "Ya hay un minijefe activo"
         elif spawn_id == "Companion":
             if not hasattr(g,"companions"):
-                self._msg = "Solo disponible en Boss Fight"
-                return
+                self._msg = "Solo disponible en Boss Fight"; return
             ox,oy = random.choice([(-180,-80),(180,-80),(-180,80),(180,80)])
             c = Companion(canvas, BOSS_X+ox, BOSS_Y+oy, difficulty=max(1,g.boss_phase if hasattr(g,"boss_phase") else 1))
             g.companions.append(c)
-            _log("Acompañante spawneado", COMPANION_COLOR)
-            self._msg = "👾 Acompañante spawneado"
-
+            _log("Acompañante spawneado", COMPANION_COLOR); self._msg = "👾 Acompañante spawneado"
         elif spawn_id == "Ball_x5":
             for _ in range(5):
                 side = random.choice(["L","R","T","B"])
@@ -2698,33 +2557,23 @@ class AdminPanel:
                 y = -30 if side=="T" else HEIGHT+30 if side=="B" else random.randint(0,HEIGHT)
                 g.obstacles.append(Ball(canvas,"ball",x=x,y=y,
                     speed=2.5+g.difficulty*0.5,radius=16,warn_time=18,lifetime=200))
-            _log("x5 bolas spawneadas", DANGER_COLOR)
-            self._msg = "🎱 x5 bolas spawneadas"
-
+            _log("x5 bolas spawneadas", DANGER_COLOR); self._msg = "🎱 x5 bolas spawneadas"
         elif spawn_id == "Avalanche":
             if hasattr(g,"_launch_avalanche"):
-                g._launch_avalanche()
-                _log("Avalancha forzada", AVAL_COLOR)
-                self._msg = "🌊 Avalancha lanzada"
-            else:
-                self._msg = "No disponible en este modo"
-
+                g._launch_avalanche(); _log("Avalancha forzada", AVAL_COLOR); self._msg = "🌊 Avalancha lanzada"
+            else: self._msg = "No disponible en este modo"
         elif spawn_id == "CrossBeams":
             for y in [HEIGHT//4, HEIGHT//2, 3*HEIGHT//4]:
                 g.obstacles.append(BeamH(canvas,"beam_h",y=y,thickness=24,warn_time=28,lifetime=55))
             for x in [WIDTH//4, WIDTH//2, 3*WIDTH//4]:
                 g.obstacles.append(BeamV(canvas,"beam_v",x=x,thickness=24,warn_time=28,lifetime=55))
-            _log("Cruz de rayos lanzada", WARN_COLOR)
-            self._msg = "✚ Cruz de rayos activa"
-
+            _log("Cruz de rayos lanzada", WARN_COLOR); self._msg = "✚ Cruz de rayos activa"
         elif spawn_id == "LaserGrid":
             for slope, offset_frac in [(1,0),(1,0.4),(-1,0),(-1,0.4)]:
                 off = int(HEIGHT*offset_frac) + random.randint(-30,30)
                 g.obstacles.append(LaserDiag(canvas,"laser",slope=slope,offset=off,
                     thickness=22,warn_time=30,lifetime=60))
-            _log("Cuadrícula láser activa", "#ff8844")
-            self._msg = "⚡ Cuadrícula láser"
-
+            _log("Cuadrícula láser activa", "#ff8844"); self._msg = "⚡ Cuadrícula láser"
         self._msg_age=0
 
     def _force_boss_phase(self, hp_pct):
@@ -2733,47 +2582,35 @@ class AdminPanel:
         new_hp = max(1, int(BOSS_MAX_HP * hp_pct / 100))
         g.boss_hp = new_hp
         new_phase = 1 if new_hp > BOSS_MAX_HP*0.66 else 2 if new_hp > BOSS_MAX_HP*0.33 else 3
-        g.boss_phase = new_phase
-        g.in_transition = False
+        g.boss_phase = new_phase; g.in_transition = False
         _log(f"Fase forzada → {new_phase} (HP:{new_hp})", BOSS_COLOR)
-        self._msg = f"⚡ Fase {new_phase} forzada (HP:{new_hp})"
-        self._msg_age = 0
+        self._msg = f"⚡ Fase {new_phase} forzada (HP:{new_hp})"; self._msg_age = 0
 
     def _do_speed(self, sact):
         global FPS
-        speeds = {"speed_025":15, "speed_050":30, "speed_100":60,
-                  "speed_150":90, "speed_200":120}
+        speeds = {"speed_025":15, "speed_050":30, "speed_100":60, "speed_150":90, "speed_200":120}
         if sact in speeds:
             FPS = speeds[sact]
-            _log(f"FPS cambiado → {FPS}", "#ffaa44")
-            self._msg = f"⏱ FPS → {FPS}"
-            self._msg_age = 0
+            _log(f"FPS cambiado → {FPS}", "#ffaa44"); self._msg = f"⏱ FPS → {FPS}"; self._msg_age = 0
 
-    # ══ Cambio de valor en Variables ══════════════════════════════════
     def _change_val(self, d):
         if self.sel>=len(ADMIN_VARS): return
         key,_,_,vmin,vmax,step,_ = ADMIN_VARS[self.sel]
         val=max(vmin,min(vmax,self._vals.get(key,vmin)+d*step))
-        self._vals[key]=val
-        globals()[key]=val
+        self._vals[key]=val; globals()[key]=val
         _log(f"{key} → {val}", self.VAL_COL)
-        self._msg=f"✓ {key} = {val}"
-        self._msg_age=0
+        self._msg=f"✓ {key} = {val}"; self._msg_age=0
 
     def _apply_all(self):
         g2=globals()
         for k,v in self._vals.items():
             if k in g2: g2[k]=v
         _log("Todas las variables aplicadas", self.HEADER)
-        self._msg="✓ Todos los cambios aplicados"
-        self._msg_age=0
+        self._msg="✓ Todos los cambios aplicados"; self._msg_age=0
 
-    # ══ Lanzar ataques ════════════════════════════════════════════════
     def _launch_selected(self):
         if not self.game: return
-        g=self.game; canvas=g.canvas
-        cx,cy=BOSS_X,BOSS_Y; launched=[]
-
+        g=self.game; canvas=g.canvas; cx,cy=BOSS_X,BOSS_Y; launched=[]
         for atk_cls in self.atk_sel:
             obs=None
             if atk_cls=="BeamH":
@@ -2801,15 +2638,11 @@ class AdminPanel:
                     speed=3.2,radius=14,warn_time=18,lifetime=200)
             if obs:
                 g.obstacles.append(obs); launched.append(atk_cls)
-
         if launched:
             _log(f"Ataque: {', '.join(launched)}", self.BTN_ATK)
             self._msg=f"💥 {', '.join(launched)}"; self._msg_age=0
 
 
-# ─────────────────────────────────────────────
-# PANTALLA PRINCIPAL / CONTROLADOR
-# ─────────────────────────────────────────────
 class App:
     def __init__(self, root):
         self.root = root
@@ -2838,20 +2671,18 @@ class App:
     def _draw_menu(self):
         f = self._menu_frame = getattr(self,"_menu_frame",0)+1
         self.canvas.delete("all")
-
         self.canvas.create_rectangle(0,0,WIDTH,HEIGHT,fill=BG_COLOR,outline="")
         for x in range(0,WIDTH,40): self.canvas.create_line(x,0,x,HEIGHT,fill="#160020")
         for y in range(0,HEIGHT,40): self.canvas.create_line(0,y,WIDTH,y,fill="#160020")
 
         self.canvas.create_text(WIDTH//2+3,HEIGHT//2-123,
-            text="JUST SHAPES & BEATS",font=("Courier",34,"bold"),fill="#330011")
+            text="JUST SHAPES WITHOUT BEATS",font=("Courier",34,"bold"),fill="#330011")
         self.canvas.create_text(WIDTH//2,HEIGHT//2-120,
-            text="JUST SHAPES & BEATS",font=("Courier",34,"bold"),fill=PLAYER_COLOR)
+            text="JUST SHAPES WITHOUT BEATS",font=("Courier",34,"bold"),fill=PLAYER_COLOR)
         self.canvas.create_text(WIDTH//2,HEIGHT//2-76,
             text="TKINTER EDITION",font=("Courier",13),fill=DIM_COLOR)
 
         t = time.time()
-
         pulse_n = int(180+75*math.sin(t*2.5))
         col_n = "#{:02x}{:02x}{:02x}".format(min(255,pulse_n),50,100)
         self.canvas.create_rectangle(WIDTH//2-160,HEIGHT//2-20,WIDTH//2+160,HEIGHT//2+30,
@@ -2876,11 +2707,9 @@ class App:
         self.canvas.create_text(WIDTH//2,HEIGHT//2+145,
             text="WASD/Flechas = Mover   SPACE/SHIFT = Dash   ESC = Salir",
             font=("Courier",9),fill=DIM_COLOR)
-
         self.canvas.create_text(WIDTH//2,HEIGHT//2+162,
             text=f"Panel Admin: tecla [{ADMIN_KEY}]  (5 pestañas: VARS, ESTADO, ATAQUES, SPAWN, MAPA/LOG)",
             font=("Courier",7),fill="#553355")
-
         self.canvas.create_text(WIDTH//2,HEIGHT//2+178,
             text="Normal — Aviso NARANJA=rayo  MAGENTA=onda  VERDE=rafaga",
             font=("Courier",7),fill="#553355")
@@ -2897,12 +2726,9 @@ class App:
             self.root.after(50, self._draw_menu)
 
     def _menu_click(self, event):
-        if event.y > HEIGHT//2-20 and event.y < HEIGHT//2+30:
-            self._start_normal()
-        elif event.y > HEIGHT//2+50 and event.y < HEIGHT//2+100:
-            self._start_boss()
-        elif event.y > HEIGHT//2+108 and event.y < HEIGHT//2+130:
-            self._show_settings()
+        if event.y > HEIGHT//2-20 and event.y < HEIGHT//2+30: self._start_normal()
+        elif event.y > HEIGHT//2+50 and event.y < HEIGHT//2+100: self._start_boss()
+        elif event.y > HEIGHT//2+108 and event.y < HEIGHT//2+130: self._show_settings()
 
     def _start_normal(self):
         if self.current_mode is not None: return
@@ -2933,12 +2759,11 @@ class App:
             font=("Courier",12,"bold"), bg="#1a0030", fg="#00ffcc",
             insertbackground="#00ffcc", justify="center")
         entry.pack(side="left", padx=4)
-        def capture_key(e):
-            var.set(e.keysym); return "break"
+        def capture_key(e): var.set(e.keysym); return "break"
         entry.bind("<KeyPress>", capture_key)
         tk.Label(win, text="(pulsa la tecla deseada en el campo de arriba)",
             font=("Courier",8), fg="#665577", bg="#0a0012").pack()
-        tk.Label(win, text=f"Panel tiene 5 pestañas: VARS · ESTADO · ATAQUES · SPAWN · MAPA/LOG",
+        tk.Label(win, text="Panel tiene 5 pestañas: VARS · ESTADO · ATAQUES · SPAWN · MAPA/LOG",
             font=("Courier",7), fg="#443355", bg="#0a0012").pack(pady=2)
         def save():
             global ADMIN_KEY
@@ -2946,8 +2771,7 @@ class App:
             win.destroy()
         tk.Button(win, text="GUARDAR",
             font=("Courier",10,"bold"), bg="#330055", fg="#cc00ff",
-            activebackground="#550088", relief="flat",
-            command=save).pack(pady=14)
+            activebackground="#550088", relief="flat", command=save).pack(pady=14)
         tk.Label(win, text=f"Tecla actual: {ADMIN_KEY}",
             font=("Courier",8), fg="#665577", bg="#0a0012").pack()
 
